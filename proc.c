@@ -410,7 +410,7 @@ scheduler(void)
         // Switch to chosen process.  It is the process's job
         // to release ptable.lock and then reacquire it
         // before jumping back to us.
-        // cprintf("%d ** %d\n", c->apicid, p->pid);
+        cprintf("%d ** %d\n", c->apicid, p->pid);
         c->proc = p;
         switchuvm(p);
         p->state = RUNNING;
@@ -474,40 +474,44 @@ scheduler(void)
       // Enable interrupts on this processor.
       sti();
 
-      int minPriority = -1;
       struct proc* minProc = 0;
-
+      struct proc* pq = 0;
       // Loop over process table looking for process to run.
       acquire(&ptable.lock);
       for(p = ptable.proc; p < &ptable.proc[NPROC]; p++){
         if(p->state != RUNNABLE)
           continue;
-        if(minPriority == -1){
-          minPriority = p->priority;
-          minProc = p;
+        // if(minPriority == -1){
+        //   minPriority = p->priority;
+        //   minProc = p;
+        // }
+        // else if(minPriority > p->priority){
+        //   minPriority = p->priority;
+        //   minProc = p;
+        // }
+        minProc = p;
+        for(pq = ptable.proc; pq < &ptable.proc[NPROC]; pq++) {
+          if(pq->state == RUNNABLE && pq->priority < minProc->priority) {
+            minProc = pq;
+          }
         }
-        else if(minPriority > p->priority){
-          minPriority = p->priority;
-          minProc = p;
+        if(minProc!=0){
+          p = minProc;
+          cprintf("%d ** %d\n", c->apicid, p->pid);
+          // Switch to chosen process.  It is the process's job
+          // to release ptable.lock and then reacquire it
+          // before jumping back to us.
+          c->proc = p;
+          switchuvm(p);
+          p->state = RUNNING;
+
+          swtch(&(c->scheduler), p->context);
+          switchkvm();
+
+          // Process is done running for now.
+          // It should have changed its p->state before coming back.
+          c->proc = 0;
         }
-
-      }
-      if(minProc!=0){
-        p = minProc;
-        // cprintf("%d ** %d\n", c->apicid, p->pid);
-        // Switch to chosen process.  It is the process's job
-        // to release ptable.lock and then reacquire it
-        // before jumping back to us.
-        c->proc = p;
-        switchuvm(p);
-        p->state = RUNNING;
-
-        swtch(&(c->scheduler), p->context);
-        switchkvm();
-
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
       }
       release(&ptable.lock);
     }
@@ -705,9 +709,9 @@ yield(void)
 {
   acquire(&ptable.lock);  //DOC: yieldlock
   myproc()->state = RUNNABLE;
-
+  cprintf("Yield called\n");
   #ifdef MLFQ
-    cprintf("PREMPTION %d\n", myproc()->pid);
+    cprintf("PREMPTION %d with curTime %d\n", myproc()->pid, myproc()->curTime);
     myproc()->queue++;
     myproc()->curTime = 0;
     enQueue(myproc()->queue, myproc());
@@ -1058,4 +1062,27 @@ int getpinfo(struct proc_stat* pinfo_p, int pid)
   release(&ptable.lock);
 
   return 0;
+}
+
+int higherPriority(int cur_proc_priority, int flag) { 
+  struct proc* p = 0;
+  acquire(&ptable.lock);
+  for(p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
+    if(p->priority < cur_proc_priority && p->pid !=0 ) {
+      cprintf("%d Higher priority found %d %d\n", p->pid, p->priority, cur_proc_priority);
+      release(&ptable.lock);
+      return 1;
+    }
+  }
+  if(flag) {
+    for(p = ptable.proc; p < &ptable.proc[NPROC]; p++) {
+    if(p->priority == cur_proc_priority && p->pid !=0 ) {
+      cprintf("%d Equal priority found  and time slice expired %d %d\n", p->pid, p->priority, cur_proc_priority);
+      release(&ptable.lock);
+      return 1;
+    }
+  }
+  }
+  release(&ptable.lock);
+  return 0; 
 }
